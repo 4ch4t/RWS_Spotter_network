@@ -1,35 +1,34 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Spotter TX</title>
+    <title>Spotter TX (1 FPS)</title>
     <style>
-        body { font-family: Arial, sans-serif; text-align: center; margin-top: 50px; background: #121212; color: #fff; }
-        input, button { padding: 12px; font-size: 16px; margin: 10px; border-radius: 5px; border: none; }
+        body { font-family: Arial, sans-serif; text-align: center; margin-top: 30px; background: #121212; color: #fff; }
+        input, button { padding: 10px; font-size: 15px; margin: 8px; border-radius: 5px; border: none; width: 80%; max-width: 300px; }
         input { background: #222; color: #fff; border: 1px solid #444; }
-        button { background: #007bff; color: white; cursor: pointer; }
+        button { background: #007bff; color: white; cursor: pointer; font-weight: bold; }
         button.stop { background: #dc3545; }
         #status { margin-top: 20px; font-weight: bold; }
+        .field-group { margin-bottom: 5px; }
     </style>
 </head>
 <body>
 
-    <h2>Weather Spotter Tracker (TX)</h2>
+    <h2>Weather Spotter TX (1 Hz)</h2>
+    <div class="field-group"><input type="text" id="callsign" placeholder="Callsign (e.g. K0ABC)" required></div>
+    <div class="field-group"><input type="text" id="phone" placeholder="Phone (Optional)"></div>
+    <div class="field-group"><input type="email" id="email" placeholder="Email / Social (Optional)"></div>
     <div>
-        <input type="text" id="callsign" placeholder="Введите позывной (например, K0ABC)" required>
+        <button id="toggleBtn" onclick="toggleTracking()">Start Tracking</button>
     </div>
-    <div>
-        <button id="toggleBtn" onclick="toggleTracking()">Начать передачу</button>
-    </div>
-    <div id="status">Статус: Отключено</div>
+    <div id="status">Status: Offline</div>
 
-    <!-- Firebase SDKs -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
         import { getDatabase, ref, set } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
-        // Ваши настройки из панели Firebase[cite: 4]
         const firebaseConfig = {
             apiKey: "AIzaSyBIZHvOPtLdrHk2t4w5TKvP2Ro_zEjGwG0",
             authDomain: "rwsgwarn.firebaseapp.com",
@@ -45,66 +44,97 @@
         const db = getDatabase(app);
 
         let watchId = null;
+        let txInterval = null;
         let isTracking = false;
+        
+        let currentPos = { lat: null, lon: null, speed: 0 };
+        let lastLat = null;
+        let lastLon = null;
+        let heading = 0;
+
+        function calculateHeading(lat1, lon1, lat2, lon2) {
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            lat1 = lat1 * Math.PI / 180;
+            lat2 = lat2 * Math.PI / 180;
+            const y = Math.sin(dLon) * Math.cos(lat2);
+            const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+            let brng = Math.atan2(y, x) * 180 / Math.PI;
+            return (brng + 360) % 360;
+        }
 
         window.toggleTracking = function() {
             const callsignInput = document.getElementById("callsign").value.trim().toUpperCase();
+            const phoneInput = document.getElementById("phone").value.trim();
+            const emailInput = document.getElementById("email").value.trim();
             const btn = document.getElementById("toggleBtn");
             const statusDiv = document.getElementById("status");
 
             if (!callsignInput) {
-                alert("Сначала введите позывной!");
+                alert("Please enter a callsign!");
                 return;
             }
 
             if (!isTracking) {
                 if (!navigator.geolocation) {
-                    alert("Геолокация не поддерживается вашим браузером");
+                    alert("Geolocation not supported");
                     return;
                 }
 
                 isTracking = true;
-                btn.textContent = "Остановить";
+                btn.textContent = "Stop Tracking";
                 btn.className = "stop";
-                statusDiv.textContent = "Статус: Получение GPS...";
+                statusDiv.textContent = "Status: Acquiring GPS...";
 
+                // Continuous GPS listener to update memory
                 watchId = navigator.geolocation.watchPosition(
                     (position) => {
                         const lat = position.coords.latitude;
                         const lon = position.coords.longitude;
                         
-                        const cleanKey = callsignInput.replace(/[^a-zA-Z0-9]/g, "_");
-
-                        const spotterRef = ref(db, 'spotters/' + cleanKey);
-                        set(spotterRef, {
-                            callsign: callsignInput,
-                            lat: lat,
-                            lon: lon,
-                            timestamp: Date.now()
-                        }).then(() => {
-                            statusDiv.textContent = `Статус: Передача (${lat.toFixed(4)}, ${lon.toFixed(4)})`;
-                            statusDiv.style.color = "#28a745";
-                        }).catch((error) => {
-                            console.error("Ошибка записи позиции: ", error);
-                            statusDiv.textContent = "Статус: Ошибка передачи данных";
-                            statusDiv.style.color = "#dc3545";
-                        });
+                        if (lastLat !== null && lastLon !== null && (lastLat !== lat || lastLon !== lon)) {
+                            heading = calculateHeading(lastLat, lastLon, lat, lon);
+                        }
+                        
+                        lastLat = lat;
+                        lastLon = lon;
+                        currentPos = { lat: lat, lon: lon, speed: position.coords.speed || 0 };
                     },
-                    (error) => {
-                        statusDiv.textContent = `Ошибка GPS: ${error.message}`;
-                        statusDiv.style.color = "#dc3545";
-                    },
-                    { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 }
+                    (error) => console.error(error),
+                    { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
                 );
 
+                // Enforce strict 1 FPS (1000 ms) transmission loop
+                const cleanKey = callsignInput.replace(/[^a-zA-Z0-9]/g, "_");
+                const spotterRef = ref(db, 'spotters/' + cleanKey);
+
+                txInterval = setInterval(() => {
+                    if (currentPos.lat === null || currentPos.lon === null) return;
+
+                    set(spotterRef, {
+                        callsign: callsignInput,
+                        phone: phoneInput,
+                        email: emailInput,
+                        lat: currentPos.lat,
+                        lon: currentPos.lon,
+                        speed: currentPos.speed,
+                        heading: heading,
+                        timestamp: Date.now()
+                    }).then(() => {
+                        statusDiv.textContent = `TX 1 Hz: (${currentPos.lat.toFixed(4)}, ${currentPos.lon.toFixed(4)})`;
+                        statusDiv.style.color = "#28a745";
+                    }).catch((error) => {
+                        statusDiv.textContent = "TX Error";
+                        statusDiv.style.color = "#dc3545";
+                    });
+                }, 1000);
+
             } else {
-                if (watchId !== null) {
-                    navigator.geolocation.clearWatch(watchId);
-                }
+                if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+                if (txInterval !== null) clearInterval(txInterval);
                 isTracking = false;
-                btn.textContent = "Начать передачу";
+                btn.textContent = "Start Tracking";
                 btn.className = "";
-                statusDiv.textContent = "Статус: Отключено";
+                statusDiv.textContent = "Status: Offline";
                 statusDiv.style.color = "#fff";
             }
         };
