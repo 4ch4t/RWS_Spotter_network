@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spotter TX</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; margin-top: 50px; background: #121212; color: #fff; }
+        input, button { padding: 12px; font-size: 16px; margin: 10px; border-radius: 5px; border: none; }
+        input { background: #222; color: #fff; border: 1px solid #444; }
+        button { background: #007bff; color: white; cursor: pointer; }
+        button.stop { background: #dc3545; }
+        #status { margin-top: 20px; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <h2>Weather Spotter Tracker (TX)</h2>
+    <div>
+        <input type="text" id="callsign" placeholder="Введите позывной (например, K0ABC)" required>
+    </div>
+    <div>
+        <button id="toggleBtn" onclick="toggleTracking()">Начать передачу</button>
+    </div>
+    <div id="status">Статус: Отключено</div>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getDatabase, ref, set } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+
+        // Ваши настройки из панели Firebase[cite: 4]
+        const firebaseConfig = {
+            apiKey: "AIzaSyBIZHvOPtLdrHk2t4w5TKvP2Ro_zEjGwG0",
+            authDomain: "rwsgwarn.firebaseapp.com",
+            databaseURL: "https://rwsgwarn-default-rtdb.europe-west1.firebasedatabase.app",
+            projectId: "rwsgwarn",
+            storageBucket: "rwsgwarn.firebasestorage.app",
+            messagingSenderId: "1026100860833",
+            appId: "1:1026100860833:web:db7548841144d94995de0",
+            measurementId: "G-9ZDFVGR7BD"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+
+        let watchId = null;
+        let isTracking = false;
+
+        window.toggleTracking = function() {
+            const callsignInput = document.getElementById("callsign").value.trim().toUpperCase();
+            const btn = document.getElementById("toggleBtn");
+            const statusDiv = document.getElementById("status");
+
+            if (!callsignInput) {
+                alert("Сначала введите позывной!");
+                return;
+            }
+
+            if (!isTracking) {
+                if (!navigator.geolocation) {
+                    alert("Геолокация не поддерживается вашим браузером");
+                    return;
+                }
+
+                isTracking = true;
+                btn.textContent = "Остановить";
+                btn.className = "stop";
+                statusDiv.textContent = "Статус: Получение GPS...";
+
+                watchId = navigator.geolocation.watchPosition(
+                    (position) => {
+                        const lat = position.coords.latitude;
+                        const lon = position.coords.longitude;
+                        
+                        const cleanKey = callsignInput.replace(/[^a-zA-Z0-9]/g, "_");
+
+                        const spotterRef = ref(db, 'spotters/' + cleanKey);
+                        set(spotterRef, {
+                            callsign: callsignInput,
+                            lat: lat,
+                            lon: lon,
+                            timestamp: Date.now()
+                        }).then(() => {
+                            statusDiv.textContent = `Статус: Передача (${lat.toFixed(4)}, ${lon.toFixed(4)})`;
+                            statusDiv.style.color = "#28a745";
+                        }).catch((error) => {
+                            console.error("Ошибка записи позиции: ", error);
+                            statusDiv.textContent = "Статус: Ошибка передачи данных";
+                            statusDiv.style.color = "#dc3545";
+                        });
+                    },
+                    (error) => {
+                        statusDiv.textContent = `Ошибка GPS: ${error.message}`;
+                        statusDiv.style.color = "#dc3545";
+                    },
+                    { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 }
+                );
+
+            } else {
+                if (watchId !== null) {
+                    navigator.geolocation.clearWatch(watchId);
+                }
+                isTracking = false;
+                btn.textContent = "Начать передачу";
+                btn.className = "";
+                statusDiv.textContent = "Статус: Отключено";
+                statusDiv.style.color = "#fff";
+            }
+        };
+    </script>
+</body>
+</html>
